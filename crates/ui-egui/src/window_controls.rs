@@ -249,16 +249,21 @@ pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
 /// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
 /// The release goes before the input's first press (the next resize or move, or a click), which
 /// egui would otherwise end straight away; a release after that press is the press's own. It also
-/// goes before the pointer leaving, as a button event would bring the gone pointer back.
+/// goes before the pointer leaving, as a button event would bring the gone pointer back; a release
+/// the input brings after the pointer left is the grab's own, and moves there instead.
 pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
     if ctx.data_mut(|d| d.remove_temp::<()>(grab_id())).is_none() {
         return;
     }
     let mut at = raw.events.len();
     let mut gone = None;
+    let mut brought = None;
     for (n, e) in raw.events.iter().enumerate() {
         match e {
-            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => return,
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => {
+                brought = Some(n);
+                break;
+            }
             egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. } => {
                 at = n;
                 break;
@@ -268,6 +273,14 @@ pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput)
             }
             _ => {}
         }
+    }
+    if let Some(n) = brought {
+        // `gone` was found before `n`, so both are in range.
+        if let Some(g) = gone {
+            let release = raw.events.remove(n);
+            raw.events.insert(g, release);
+        }
+        return;
     }
     let at = gone.unwrap_or(at);
     let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
@@ -442,6 +455,7 @@ mod tests {
             ],
             false,
         );
-        assert_eq!(order.iter().filter(|e| release(e)).count(), 1, "{order:?}");
+        assert!(matches!(order.as_slice(), [r, egui::Event::PointerGone] if release(r)), "moved, not doubled: {order:?}");
+        assert_eq!(ctx.input(|i| i.pointer.latest_pos()), None, "the pointer stays gone");
     }
 }
